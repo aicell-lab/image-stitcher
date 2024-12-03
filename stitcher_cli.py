@@ -85,17 +85,79 @@ def create_params(args: argparse.Namespace) -> StitchingParameters:
     
     return StitchingParameters.from_dict(params_dict)
 
+def process_coordinates_file(input_folder: str) -> str:
+    """Process and convert coordinates.csv file to the expected format."""
+    import pandas as pd
+    import os
+    from pathlib import Path
+
+    # Define file paths
+    input_coords_file = os.path.join(input_folder, '0', 'coordinates.csv')
+
+    # Create a directory in user's home folder for processed files
+    user_home = str(Path.home())
+    processed_dir = os.path.join(user_home, '.image_stitcher_processed')
+    os.makedirs(processed_dir, exist_ok=True)
+
+    # Create a unique filename based on the input folder name
+    folder_hash = hash(input_folder) & 0xffffffff
+    output_coords_file = os.path.join(processed_dir, f'coordinates_processed_{folder_hash}.csv')
+
+    if not os.path.exists(input_coords_file):
+        raise FileNotFoundError(f"Coordinates file not found: {input_coords_file}")
+
+    # Read the original coordinates file
+    df = pd.read_csv(input_coords_file)
+
+    # Ensure required columns are present
+    required_columns = ['region', 'i', 'j', 'z_level', 'x (mm)', 'y (mm)', 'z (um)']
+    for col in required_columns:
+        if col not in df.columns:
+            raise ValueError(f"Missing required column '{col}' in coordinates.csv")
+
+    # Fill empty 'j' values with 0 and ensure correct data types
+    df['j'] = df['j'].fillna(0).astype(int)
+    df['i'] = df['i'].astype(int)
+    df['z_level'] = df['z_level'].astype(int)
+
+    # Calculate `fov` as `i * max_j + j`
+    max_j = df['j'].max() + 1  # Add 1 to ensure proper indexing
+    df['fov'] = df['i'] * max_j + df['j']
+
+    # Create the new coordinates file with the required columns
+    new_df = pd.DataFrame({
+        'region': df['region'],
+        'fov': df['fov'],
+        'z_level': df['z_level'],
+        'x (mm)': df['x (mm)'],
+        'y (mm)': df['y (mm)'],
+        'z (um)': df['z (um)']
+    })
+
+    # Save the processed coordinates file
+    new_df.to_csv(output_coords_file, index=False)
+    print(f"Processed coordinates saved to: {output_coords_file}")
+    print(f"First few rows of processed coordinates:")
+    print(new_df.head())
+    print(f"Total number of unique FOVs: {len(new_df)}")
+
+    return output_coords_file
+    
 def main():
     """Main CLI entry point."""
+    # Parse arguments first
     args = parse_args()
-    
+
     try:
+        # Process coordinates file after parsing arguments
+        process_coordinates_file(args.input_folder)
+
         # Create stitching parameters from arguments
         params = create_params(args)
-        
+
         # Initialize stitcher
         stitcher = CoordinateStitcher(params)
-        
+
         # Run stitching process
         print(f"Starting stitching with parameters:")
         print(f"Input folder: {params.input_folder}")
@@ -109,9 +171,9 @@ def main():
         print(f"Scan pattern: {params.scan_pattern}")
         print(f"Merge timepoints: {params.merge_timepoints}")
         print(f"Merge HCS regions: {params.merge_hcs_regions}")
-        
+
         stitcher.run()
-        
+
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
